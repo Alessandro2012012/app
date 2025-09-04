@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -28,7 +28,7 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
 # Create the main app without a prefix
-app = FastAPI(title="Flicksy API", description="A modern, transparent social media platform")
+app = FastAPI(title="Flicksy API", description="Connect, Share, Discover – Welcome to Flicksy!")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -70,6 +70,12 @@ class UserResponse(BaseModel):
     following_count: int
     posts_count: int
     created_at: datetime
+
+# Search Models
+class SearchResult(BaseModel):
+    users: List[UserResponse]
+    posts: List['PostResponse']
+    total_results: int
 
 # Post Models
 class PostCreate(BaseModel):
@@ -272,6 +278,84 @@ async def get_user_profile(username: str):
     
     return UserResponse(**{k: v for k, v in user.items() if k != "password_hash"})
 
+# Search Routes
+@api_router.get("/search", response_model=SearchResult)
+async def search(
+    q: str = Query(..., min_length=1, description="Search query"),
+    type: str = Query("all", regex="^(all|users|posts)$", description="Search type"),
+    limit: int = Query(10, ge=1, le=50, description="Results limit"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Search for users and posts"""
+    users = []
+    posts = []
+    
+    # Create case-insensitive regex pattern
+    search_pattern = {"$regex": re.escape(q), "$options": "i"}
+    
+    if type in ["all", "users"]:
+        # Search users by username, display_name, or bio
+        user_cursor = db.users.find({
+            "$or": [
+                {"username": search_pattern},
+                {"display_name": search_pattern},
+                {"bio": search_pattern}
+            ],
+            "is_banned": {"$ne": True}
+        }).limit(limit)
+        
+        user_docs = await user_cursor.to_list(length=limit)
+        users = [UserResponse(**{k: v for k, v in user.items() if k != "password_hash"}) 
+                for user in user_docs]
+    
+    if type in ["all", "posts"]:
+        # Search posts by content
+        posts_cursor = db.posts.find({
+            "content": search_pattern
+        }).sort("created_at", -1).limit(limit)
+        
+        post_docs = await posts_cursor.to_list(length=limit)
+        
+        # Check which posts are liked by current user
+        post_ids = [post["id"] for post in post_docs]
+        liked_posts = await db.likes.find({
+            "user_id": current_user["id"],
+            "post_id": {"$in": post_ids}
+        }).to_list(len(post_ids))
+        
+        liked_post_ids = {like["post_id"] for like in liked_posts}
+        
+        posts = [PostResponse(**post, liked_by_user=post["id"] in liked_post_ids) 
+                for post in post_docs]
+    
+    total_results = len(users) + len(posts)
+    
+    return SearchResult(
+        users=users,
+        posts=posts,
+        total_results=total_results
+    )
+
+@api_router.get("/trending/hashtags")
+async def get_trending_hashtags(limit: int = Query(10, ge=1, le=20)):
+    """Get trending hashtags"""
+    # Simple hashtag extraction from recent posts
+    recent_posts = await db.posts.find().sort("created_at", -1).limit(1000).to_list(1000)
+    
+    hashtag_counts = {}
+    hashtag_pattern = re.compile(r'#(\w+)', re.IGNORECASE)
+    
+    for post in recent_posts:
+        hashtags = hashtag_pattern.findall(post["content"])
+        for hashtag in hashtags:
+            hashtag_lower = hashtag.lower()
+            hashtag_counts[hashtag_lower] = hashtag_counts.get(hashtag_lower, 0) + 1
+    
+    # Sort by count and return top hashtags
+    trending = sorted(hashtag_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+    
+    return [{"hashtag": f"#{hashtag}", "count": count} for hashtag, count in trending]
+
 # Post Routes
 @api_router.post("/posts", response_model=PostResponse)
 async def create_post(post_data: PostCreate, current_user: dict = Depends(get_current_user)):
@@ -316,6 +400,30 @@ async def get_posts(limit: int = 20, skip: int = 0, current_user: dict = Depends
         post_responses.append(post_response)
     
     return post_responses
+
+@api_router.get("/posts/trending", response_model=List[PostResponse])
+async def get_trending_posts(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    """Get trending posts based on likes and comments in the last 24 hours"""
+    # Get posts from last 24 hours and sort by engagement
+    twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+    
+    posts = await db.posts.find({
+        "created_at": {"$gte": twenty_four_hours_ago}
+    }).sort([
+        ("likes_count", -1),
+        ("comments_count", -1),
+        ("created_at", -1)
+    ]).limit(limit).to_list(limit)
+    
+    # Check which posts are liked by current user
+    liked_posts = await db.likes.find({
+        "user_id": current_user["id"],
+        "post_id": {"$in": [post["id"] for post in posts]}
+    }).to_list(len(posts))
+    
+    liked_post_ids = {like["post_id"] for like in liked_posts}
+    
+    return [PostResponse(**post, liked_by_user=post["id"] in liked_post_ids) for post in posts]
 
 @api_router.post("/posts/{post_id}/like")
 async def toggle_like_post(post_id: str, current_user: dict = Depends(get_current_user)):
@@ -596,7 +704,7 @@ async def delete_post_admin(post_id: str, moderator_user: dict = Depends(get_mod
 # Health Check
 @api_router.get("/")
 async def root():
-    return {"message": "Flicksy API is running", "version": "1.0.0"}
+    return {"message": "Flicksy API is running", "version": "2.0.0", "tagline": "Connect, Share, Discover"}
 
 # Include the router in the main app
 app.include_router(api_router)
