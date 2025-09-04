@@ -444,6 +444,7 @@ const Feed = () => {
       );
       setPosts([response.data, ...posts]);
       setNewPost("");
+      console.log("Welcome to Flicksy! Post created successfully.");
     } catch (error) {
       console.error("Failed to create post:", error);
     } finally {
