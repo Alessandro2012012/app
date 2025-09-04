@@ -28,7 +28,7 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
 # Create the main app without a prefix
-app = FastAPI(title="FairSocial API", description="A modern, transparent social media platform")
+app = FastAPI(title="Flicksy API", description="A modern, transparent social media platform")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
