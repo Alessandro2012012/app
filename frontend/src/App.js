@@ -11,7 +11,7 @@ import { Badge } from "./components/ui/badge";
 import { Separator } from "./components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "./components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
-import { Heart, MessageCircle, Repeat2, Share, Plus, Check, User, Home, Bell, Search, LogOut } from "lucide-react";
+import { Heart, MessageCircle, Repeat2, Share, Plus, Check, User, Home, Bell, Search, LogOut, Shield, Settings, Users, BarChart } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -215,6 +215,399 @@ const AuthForm = () => {
           </form>
         </CardContent>
       </Card>
+    </div>
+  );
+};
+
+// Verification Request Component
+const VerificationRequest = () => {
+  const [showDialog, setShowDialog] = useState(false);
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [myRequests, setMyRequests] = useState([]);
+  const { token } = useAuth();
+
+  useEffect(() => {
+    fetchMyRequests();
+  }, []);
+
+  const fetchMyRequests = async () => {
+    try {
+      const response = await axios.get(`${API}/verification/my-requests`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setMyRequests(response.data);
+    } catch (error) {
+      console.error("Failed to fetch verification requests:", error);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!reason.trim()) return;
+
+    setLoading(true);
+    try {
+      await axios.post(
+        `${API}/verification/request`,
+        { reason: reason },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setShowDialog(false);
+      setReason("");
+      fetchMyRequests();
+    } catch (error) {
+      console.error("Failed to submit verification request:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "approved": return "bg-green-100 text-green-700 border-green-200";
+      case "rejected": return "bg-red-100 text-red-700 border-red-200";
+      default: return "bg-yellow-100 text-yellow-700 border-yellow-200";
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <Card className="mb-6">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold">Verification Requests</h2>
+            <Dialog open={showDialog} onOpenChange={setShowDialog}>
+              <DialogTrigger asChild>
+                <Button className="bg-blue-600 hover:bg-blue-700">
+                  <Check className="w-4 h-4 mr-2" />
+                  Request Verification
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Request Account Verification</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Why should your account be verified?
+                    </label>
+                    <Textarea
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="Explain why you deserve verification (minimum 10 characters)"
+                      rows={4}
+                      minLength={10}
+                      maxLength={500}
+                      required
+                    />
+                    <p className="text-sm text-gray-500 mt-1">
+                      {reason.length}/500 characters
+                    </p>
+                  </div>
+                  <Button type="submit" disabled={loading || reason.length < 10}>
+                    {loading ? "Submitting..." : "Submit Request"}
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {myRequests.length === 0 ? (
+            <p className="text-gray-500 text-center py-4">
+              No verification requests yet. Request verification to get the blue checkmark!
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {myRequests.map((request) => (
+                <div key={request.id} className="border rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <Badge className={getStatusColor(request.status)}>
+                      {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                    </Badge>
+                    <span className="text-sm text-gray-500">
+                      {new Date(request.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <p className="text-gray-700">{request.reason}</p>
+                  {request.reviewed_at && (
+                    <p className="text-sm text-gray-500 mt-2">
+                      Reviewed on {new Date(request.reviewed_at).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+// Admin Panel Component
+const AdminPanel = () => {
+  const [stats, setStats] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [verificationRequests, setVerificationRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("stats");
+  const { token } = useAuth();
+
+  useEffect(() => {
+    fetchAdminData();
+  }, []);
+
+  const fetchAdminData = async () => {
+    try {
+      const [statsRes, usersRes, verificationRes] = await Promise.all([
+        axios.get(`${API}/admin/stats`, { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get(`${API}/admin/users`, { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get(`${API}/admin/verification-requests`, { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+      
+      setStats(statsRes.data);
+      setUsers(usersRes.data);
+      setVerificationRequests(verificationRes.data);
+    } catch (error) {
+      console.error("Failed to fetch admin data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerificationAction = async (requestId, action) => {
+    try {
+      await axios.post(
+        `${API}/admin/verification/${requestId}/${action}`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      fetchAdminData(); // Refresh data
+    } catch (error) {
+      console.error(`Failed to ${action} verification:`, error);
+    }
+  };
+
+  const handleUserAction = async (userId, action) => {
+    try {
+      await axios.post(
+        `${API}/admin/users/${userId}/${action}`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      fetchAdminData(); // Refresh data
+    } catch (error) {
+      console.error(`Failed to ${action} user:`, error);
+    }
+  };
+
+  if (loading) {
+    return <div className="text-center py-12">Loading admin panel...</div>;
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto">
+      <Card className="mb-6">
+        <CardHeader>
+          <h2 className="text-2xl font-bold flex items-center">
+            <Shield className="w-6 h-6 mr-2 text-blue-600" />
+            Flicksy Admin Panel
+          </h2>
+        </CardHeader>
+      </Card>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="stats">Dashboard</TabsTrigger>
+          <TabsTrigger value="users">User Management</TabsTrigger>
+          <TabsTrigger value="verifications">Verifications</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="stats" className="mt-6">
+          {stats && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <Users className="w-8 h-8 text-blue-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.total_users}</p>
+                      <p className="text-gray-600">Total Users</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <MessageCircle className="w-8 h-8 text-green-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.total_posts}</p>
+                      <p className="text-gray-600">Total Posts</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <Check className="w-8 h-8 text-purple-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.verified_users}</p>
+                      <p className="text-gray-600">Verified Users</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <Bell className="w-8 h-8 text-orange-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.pending_verifications}</p>
+                      <p className="text-gray-600">Pending Verifications</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <BarChart className="w-8 h-8 text-red-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.recent_signups}</p>
+                      <p className="text-gray-600">New Users (7 days)</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center">
+                    <MessageCircle className="w-8 h-8 text-teal-600" />
+                    <div className="ml-4">
+                      <p className="text-2xl font-bold">{stats.total_comments}</p>
+                      <p className="text-gray-600">Total Comments</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="users" className="mt-6">
+          <Card>
+            <CardHeader>
+              <h3 className="text-xl font-semibold">User Management</h3>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {users.map((user) => (
+                  <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="flex items-center space-x-4">
+                      <Avatar>
+                        <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-500 text-white">
+                          {user.display_name.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <h4 className="font-semibold">{user.display_name}</h4>
+                          {user.is_verified && (
+                            <Badge className="bg-blue-100 text-blue-700">Verified</Badge>
+                          )}
+                          {user.is_banned && (
+                            <Badge className="bg-red-100 text-red-700">Banned</Badge>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600">@{user.username}</p>
+                        <p className="text-xs text-gray-500">{user.posts_count} posts • {user.role}</p>
+                      </div>
+                    </div>
+                    <div className="flex space-x-2">
+                      {user.is_banned ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleUserAction(user.id, 'unban')}
+                          className="text-green-600 border-green-600 hover:bg-green-50"
+                        >
+                          Unban
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleUserAction(user.id, 'ban')}
+                          className="text-red-600 border-red-600 hover:bg-red-50"
+                        >
+                          Ban
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="verifications" className="mt-6">
+          <Card>
+            <CardHeader>
+              <h3 className="text-xl font-semibold">Verification Requests</h3>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {verificationRequests.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No pending verification requests</p>
+                ) : (
+                  verificationRequests.map((request) => (
+                    <div key={request.id} className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h4 className="font-semibold">{request.user_display_name}</h4>
+                          <p className="text-sm text-gray-600">@{request.user_username}</p>
+                        </div>
+                        <div className="flex space-x-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleVerificationAction(request.id, 'approve')}
+                            className="bg-green-600 hover:bg-green-700"
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleVerificationAction(request.id, 'reject')}
+                            className="text-red-600 border-red-600 hover:bg-red-50"
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-gray-700 bg-gray-50 p-3 rounded">{request.reason}</p>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Submitted on {new Date(request.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
@@ -567,6 +960,8 @@ const Feed = () => {
 const Sidebar = () => {
   const { user, logout } = useAuth();
 
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+
   return (
     <div className="w-64 bg-white border-r border-gray-200 min-h-screen p-6 fixed left-0 top-0">
       <div className="mb-8">
@@ -592,6 +987,16 @@ const Sidebar = () => {
           <User className="w-6 h-6 text-gray-600" />
           <span className="font-medium text-gray-800">Profile</span>
         </Link>
+        <Link to="/verification" className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-100 transition-colors">
+          <Check className="w-6 h-6 text-gray-600" />
+          <span className="font-medium text-gray-800">Verification</span>
+        </Link>
+        {isAdmin && (
+          <Link to="/admin" className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-100 transition-colors">
+            <Shield className="w-6 h-6 text-gray-600" />
+            <span className="font-medium text-gray-800">Admin Panel</span>
+          </Link>
+        )}
       </nav>
 
       <div className="absolute bottom-6 left-6 right-6">
@@ -711,6 +1116,8 @@ function App() {
                   <Routes>
                     <Route path="/" element={<Feed />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/verification" element={<VerificationRequest />} />
+                    <Route path="/admin" element={<AdminPanel />} />
                     <Route path="/search" element={<div className="text-center py-12 text-gray-500">Search functionality coming soon...</div>} />
                     <Route path="/notifications" element={<div className="text-center py-12 text-gray-500">Notifications coming soon...</div>} />
                   </Routes>

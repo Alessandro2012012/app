@@ -43,6 +43,7 @@ class UserBase(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=50)
     bio: Optional[str] = Field(None, max_length=160)
     is_verified: bool = False
+    role: str = "user"  # user, moderator, admin, super_admin
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=6)
@@ -64,6 +65,7 @@ class UserResponse(BaseModel):
     display_name: str
     bio: Optional[str]
     is_verified: bool
+    role: str
     followers_count: int
     following_count: int
     posts_count: int
@@ -102,6 +104,40 @@ class Comment(BaseModel):
     author_is_verified: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     likes_count: int = 0
+
+# Admin Models
+class AdminStats(BaseModel):
+    total_users: int
+    total_posts: int
+    total_comments: int
+    verified_users: int
+    pending_verifications: int
+    recent_signups: int
+
+class VerificationRequest(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    user_username: str
+    user_display_name: str
+    reason: str
+    status: str  # pending, approved, rejected
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+
+class VerificationRequestCreate(BaseModel):
+    reason: str = Field(..., min_length=10, max_length=500)
+
+class UserManagement(BaseModel):
+    id: str
+    username: str
+    display_name: str
+    email: str
+    is_verified: bool
+    role: str
+    posts_count: int
+    created_at: datetime
+    is_banned: bool = False
 
 # Token Models
 class Token(BaseModel):
@@ -145,6 +181,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Verify user has admin permissions"""
+    if current_user["role"] not in ["admin", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+async def get_moderator_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Verify user has moderator permissions"""
+    if current_user["role"] not in ["moderator", "admin", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Moderator access required")
+    return current_user
+
 # Authentication Routes
 @api_router.post("/auth/register", response_model=Token)
 async def register(user_data: UserCreate):
@@ -177,6 +225,7 @@ async def register(user_data: UserCreate):
     user = User(**user_dict)
     user_doc = user.dict()
     user_doc["password_hash"] = hashed_password
+    user_doc["is_banned"] = False
     
     await db.users.insert_one(user_doc)
     
@@ -196,6 +245,10 @@ async def login(login_data: UserLogin):
     
     if not user or not verify_password(login_data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    # Check if user is banned
+    if user.get("is_banned", False):
+        raise HTTPException(status_code=403, detail="Account has been suspended")
     
     # Create access token
     access_token = create_access_token(data={"sub": user["id"]})
@@ -222,6 +275,10 @@ async def get_user_profile(username: str):
 # Post Routes
 @api_router.post("/posts", response_model=PostResponse)
 async def create_post(post_data: PostCreate, current_user: dict = Depends(get_current_user)):
+    # Check if user is banned
+    if current_user.get("is_banned", False):
+        raise HTTPException(status_code=403, detail="Account suspended - cannot create posts")
+    
     post = Post(
         content=post_data.content,
         author_id=current_user["id"],
@@ -308,6 +365,10 @@ async def get_post_comments(post_id: str, limit: int = 50, skip: int = 0):
 
 @api_router.post("/posts/{post_id}/comments", response_model=Comment)
 async def create_comment(post_id: str, comment_data: CommentCreate, current_user: dict = Depends(get_current_user)):
+    # Check if user is banned
+    if current_user.get("is_banned", False):
+        raise HTTPException(status_code=403, detail="Account suspended - cannot comment")
+    
     # Check if post exists
     post = await db.posts.find_one({"id": post_id})
     if not post:
@@ -332,6 +393,205 @@ async def create_comment(post_id: str, comment_data: CommentCreate, current_user
     )
     
     return comment
+
+# Verification Routes
+@api_router.post("/verification/request")
+async def request_verification(request_data: VerificationRequestCreate, current_user: dict = Depends(get_current_user)):
+    # Check if user already has a pending request
+    existing_request = await db.verification_requests.find_one({
+        "user_id": current_user["id"],
+        "status": "pending"
+    })
+    
+    if existing_request:
+        raise HTTPException(status_code=400, detail="You already have a pending verification request")
+    
+    # Check if user is already verified
+    if current_user["is_verified"]:
+        raise HTTPException(status_code=400, detail="User is already verified")
+    
+    verification_request = VerificationRequest(
+        user_id=current_user["id"],
+        user_username=current_user["username"],
+        user_display_name=current_user["display_name"],
+        reason=request_data.reason,
+        status="pending"
+    )
+    
+    await db.verification_requests.insert_one(verification_request.dict())
+    return {"message": "Verification request submitted successfully"}
+
+@api_router.get("/verification/my-requests", response_model=List[VerificationRequest])
+async def get_my_verification_requests(current_user: dict = Depends(get_current_user)):
+    requests = await db.verification_requests.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(10)
+    return [VerificationRequest(**req) for req in requests]
+
+# Admin Routes
+@api_router.get("/admin/stats", response_model=AdminStats)
+async def get_admin_stats(admin_user: dict = Depends(get_admin_user)):
+    # Count total users
+    total_users = await db.users.count_documents({})
+    
+    # Count total posts
+    total_posts = await db.posts.count_documents({})
+    
+    # Count total comments
+    total_comments = await db.comments.count_documents({})
+    
+    # Count verified users
+    verified_users = await db.users.count_documents({"is_verified": True})
+    
+    # Count pending verification requests
+    pending_verifications = await db.verification_requests.count_documents({"status": "pending"})
+    
+    # Count recent signups (last 7 days)
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    recent_signups = await db.users.count_documents({"created_at": {"$gte": seven_days_ago}})
+    
+    return AdminStats(
+        total_users=total_users,
+        total_posts=total_posts,
+        total_comments=total_comments,
+        verified_users=verified_users,
+        pending_verifications=pending_verifications,
+        recent_signups=recent_signups
+    )
+
+@api_router.get("/admin/users", response_model=List[UserManagement])
+async def get_all_users(admin_user: dict = Depends(get_admin_user), limit: int = 50, skip: int = 0):
+    users = await db.users.find().sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    
+    user_list = []
+    for user in users:
+        user_mgmt = UserManagement(
+            id=user["id"],
+            username=user["username"],
+            display_name=user["display_name"],
+            email=user["email"],
+            is_verified=user["is_verified"],
+            role=user.get("role", "user"),
+            posts_count=user.get("posts_count", 0),
+            created_at=user["created_at"],
+            is_banned=user.get("is_banned", False)
+        )
+        user_list.append(user_mgmt)
+    
+    return user_list
+
+@api_router.get("/admin/verification-requests", response_model=List[VerificationRequest])
+async def get_verification_requests(admin_user: dict = Depends(get_admin_user), status: str = "pending"):
+    requests = await db.verification_requests.find({"status": status}).sort("created_at", -1).to_list(100)
+    return [VerificationRequest(**req) for req in requests]
+
+@api_router.post("/admin/verification/{request_id}/approve")
+async def approve_verification(request_id: str, admin_user: dict = Depends(get_admin_user)):
+    # Find the verification request
+    request = await db.verification_requests.find_one({"id": request_id})
+    if not request:
+        raise HTTPException(status_code=404, detail="Verification request not found")
+    
+    if request["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Request has already been processed")
+    
+    # Update the verification request
+    await db.verification_requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "approved",
+                "reviewed_by": admin_user["id"],
+                "reviewed_at": datetime.now(timezone.utc)
+            }
+        }
+    )
+    
+    # Verify the user
+    await db.users.update_one(
+        {"id": request["user_id"]},
+        {"$set": {"is_verified": True}}
+    )
+    
+    return {"message": "User verified successfully"}
+
+@api_router.post("/admin/verification/{request_id}/reject")
+async def reject_verification(request_id: str, admin_user: dict = Depends(get_admin_user)):
+    # Find the verification request
+    request = await db.verification_requests.find_one({"id": request_id})
+    if not request:
+        raise HTTPException(status_code=404, detail="Verification request not found")
+    
+    if request["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Request has already been processed")
+    
+    # Update the verification request
+    await db.verification_requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "rejected",
+                "reviewed_by": admin_user["id"],
+                "reviewed_at": datetime.now(timezone.utc)
+            }
+        }
+    )
+    
+    return {"message": "Verification request rejected"}
+
+@api_router.post("/admin/users/{user_id}/ban")
+async def ban_user(user_id: str, admin_user: dict = Depends(get_admin_user)):
+    # Check if user exists
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Cannot ban admin users
+    if user.get("role") in ["admin", "super_admin"]:
+        raise HTTPException(status_code=400, detail="Cannot ban admin users")
+    
+    # Ban the user
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"is_banned": True}}
+    )
+    
+    return {"message": f"User {user['username']} has been banned"}
+
+@api_router.post("/admin/users/{user_id}/unban")
+async def unban_user(user_id: str, admin_user: dict = Depends(get_admin_user)):
+    # Check if user exists
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Unban the user
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"is_banned": False}}
+    )
+    
+    return {"message": f"User {user['username']} has been unbanned"}
+
+@api_router.delete("/admin/posts/{post_id}")
+async def delete_post_admin(post_id: str, moderator_user: dict = Depends(get_moderator_user)):
+    # Check if post exists
+    post = await db.posts.find_one({"id": post_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Delete the post
+    await db.posts.delete_one({"id": post_id})
+    
+    # Delete associated comments and likes
+    await db.comments.delete_many({"post_id": post_id})
+    await db.likes.delete_many({"post_id": post_id})
+    
+    # Update user's post count
+    await db.users.update_one(
+        {"id": post["author_id"]},
+        {"$inc": {"posts_count": -1}}
+    )
+    
+    return {"message": "Post deleted successfully"}
 
 # Health Check
 @api_router.get("/")
