@@ -570,7 +570,7 @@ const Sidebar = () => {
     <div className="w-64 bg-white border-r border-gray-200 min-h-screen p-6 fixed left-0 top-0">
       <div className="mb-8">
         <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          FairSocial
+          Flicksy
         </h1>
       </div>
 
