@@ -336,7 +336,7 @@ async def create_comment(post_id: str, comment_data: CommentCreate, current_user
 # Health Check
 @api_router.get("/")
 async def root():
-    return {"message": "FairSocial API is running", "version": "1.0.0"}
+    return {"message": "Flicksy API is running", "version": "1.0.0"}
 
 # Include the router in the main app
 app.include_router(api_router)
