@@ -513,7 +513,7 @@ const Feed = () => {
                 <Textarea
                   value={newPost}
                   onChange={(e) => setNewPost(e.target.value)}
-                  placeholder="What's happening?"
+                  placeholder="What's happening on Flicksy?"
                   className="border-none resize-none focus:ring-0 text-lg placeholder-gray-500"
                   rows={3}
                   maxLength={500}
