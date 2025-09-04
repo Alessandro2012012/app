@@ -543,7 +543,7 @@ const Feed = () => {
             <CardContent>
               <div className="text-gray-500 mb-4">
                 <MessageCircle className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <h3 className="text-xl font-semibold mb-2">No posts yet</h3>
+                <h3 className="text-xl font-semibold mb-2">Welcome to Flicksy!</h3>
                 <p>Be the first to share something!</p>
               </div>
             </CardContent>
